@@ -593,7 +593,7 @@ func TestConfigPathSelection(t *testing.T) {
 
 		got := runCLI(t, nil, "check")
 
-		if got.code != 2 || !strings.Contains(got.stderr, filepath.Join(home, ".config", "mcp-auth-proxy", "config.yaml")) {
+		if got.code != 2 || !strings.Contains(got.stderr, filepath.Join(home, ".mcp-auth-proxy", "config.yaml")) {
 			t.Fatalf("code %d stderr %q", got.code, got.stderr)
 		}
 	})

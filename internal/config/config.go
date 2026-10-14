@@ -434,7 +434,7 @@ func resolve(raw rawConfig, baseDir string) *Config {
 
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "mcp-auth-proxy", "config.yaml")
+	return filepath.Join(home, ".mcp-auth-proxy", "config.yaml")
 }
 
 func Load(path string) (*Config, error) {

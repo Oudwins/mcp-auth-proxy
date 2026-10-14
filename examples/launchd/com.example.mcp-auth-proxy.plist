@@ -10,7 +10,7 @@
     <string>__HOME__/.local/bin/mcp-auth-proxy</string>
     <string>serve</string>
     <string>-c</string>
-    <string>__HOME__/.config/mcp-auth-proxy/config.yaml</string>
+    <string>__HOME__/.mcp-auth-proxy/config.yaml</string>
   </array>
 
   <key>RunAtLoad</key>

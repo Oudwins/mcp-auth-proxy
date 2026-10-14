@@ -215,8 +215,8 @@ func TestDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("ends the default config path with the YAML file under ~/.config", func(t *testing.T) {
-		want := filepath.Join(".config", "mcp-auth-proxy", "config.yaml")
+	t.Run("ends the default config path with the YAML file under ~/.mcp-auth-proxy", func(t *testing.T) {
+		want := filepath.Join(".mcp-auth-proxy", "config.yaml")
 
 		if got := DefaultPath(); !strings.HasSuffix(got, want) {
 			t.Errorf("DefaultPath() = %q", got)

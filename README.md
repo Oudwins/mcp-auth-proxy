@@ -18,9 +18,9 @@ Targets the MCP **streamable HTTP** transport. Written in Go (1.24+), macOS or L
 go install github.com/Oudwins/mcp-auth-proxy/cmd/mcp-auth-proxy@latest
 # or from a checkout: go build -o bin/mcp-auth-proxy ./cmd/mcp-auth-proxy
 
-mkdir -p ~/.config/mcp-auth-proxy
-cp examples/config.example.yaml ~/.config/mcp-auth-proxy/config.yaml
-$EDITOR ~/.config/mcp-auth-proxy/config.yaml
+mkdir -p ~/.mcp-auth-proxy
+cp examples/config.example.yaml ~/.mcp-auth-proxy/config.yaml
+$EDITOR ~/.mcp-auth-proxy/config.yaml
 
 mcp-auth-proxy check      # runs each strategy once, prints masked values and expiry
 mcp-auth-proxy serve      # start the proxy
@@ -53,7 +53,7 @@ mcp-auth-proxy check [strategy...] [-c path]
 mcp-auth-proxy --help | --version
 ```
 
-- Config path: `-c`, else `$MCP_AUTH_PROXY_CONFIG`, else `~/.config/mcp-auth-proxy/config.yaml`.
+- Config path: `-c`, else `$MCP_AUTH_PROXY_CONFIG`, else `~/.mcp-auth-proxy/config.yaml`.
 - `serve` logs to stderr and shuts down cleanly on SIGINT and SIGTERM. `--debug` logs one line per proxied request (templated path, never credentials).
 - `check` runs each strategy (or the named ones) once and prints masked values, expiry and where it came from, and the effective `allowedHosts`. Exit code 1 if any generator failed, 2 for config or usage errors.
 

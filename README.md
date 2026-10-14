@@ -1,10 +1,16 @@
 # mcp-auth-proxy
 
-A small local reverse proxy that sits between an MCP client and a remote MCP server that needs short-lived credentials (for example a server behind Google IAP). The client talks to `http://127.0.0.1:7600/` as if it were a normal MCP server. The proxy runs an allowlisted **strategy** command to generate credentials, caches them, refreshes them before they expire, and re-authenticates and retries if the upstream rejects them.
+A small local proxy that sits between an MCP client and a remote MCP server that needs short-lived credentials (for example a server behind Google IAP). By default it runs as a **stdio** MCP server: the client launches it as a command and it bridges stdin/stdout to the remote server, with no port opened. Alternatively, `mcp-auth-proxy http` runs it as a local HTTP server on `http://127.0.0.1:7600/`. Either way, the proxy runs an allowlisted **strategy** command to generate credentials, caches them, refreshes them before they expire, and re-authenticates and retries if the upstream rejects them.
 
-The proxy config only holds the strategies (fixed commands) and the hosts it may talk to. Everything else is chosen per request by the consumer through headers: which strategy to use, where to send the request, and where the credential goes.
+The proxy config only holds the strategies (fixed commands) and the hosts it may talk to. Everything else is chosen by the consumer: which strategy to use, where to send the request, and where the credential goes (command-line flags in stdio mode, request headers in http mode).
 
 ```
+stdio mode (default)
+MCP client ── spawns ──► mcp-auth-proxy -s payload-iap -t https://payload.example.com/api/mcp -H "Authorization: Bearer {{token}}"
+              stdin/stdout JSON-RPC lines        │  fills {{token}} placeholders
+                                                 └─ runs the strategy command when needed ──► https://payload.example.com/api/mcp
+
+http mode
 MCP client ── X-Proxy-Strategy: payload-iap ───────────────► 127.0.0.1:7600 ──► https://payload.example.com/api/mcp
               X-Proxy-Target:   https://payload.example.com/api/mcp   │  fills {{token}} placeholders
               Proxy-Authorization: Bearer {{token}}                   └─ runs the strategy command when needed
@@ -23,10 +29,32 @@ cp examples/config.example.yaml ~/.mcp-auth-proxy/config.yaml
 $EDITOR ~/.mcp-auth-proxy/config.yaml
 
 mcp-auth-proxy check      # runs each strategy once, prints masked values and expiry
-mcp-auth-proxy serve      # start the proxy
 ```
 
-Consumer config (Claude Code style). Non-IAP headers such as an API key pass through unchanged:
+### Consumer config: stdio (Claude Code, Cursor)
+
+The client starts the proxy itself, so there is nothing to run in the background and no port to pick:
+
+```json
+{
+  "mcpServers": {
+    "payload": {
+      "command": "mcp-auth-proxy",
+      "args": [
+        "-s", "example-iap",
+        "-t", "https://payload.example.com/api/mcp",
+        "-H", "Authorization: Bearer {{token}}"
+      ]
+    }
+  }
+}
+```
+
+`-H` is repeatable and passes any other header through to the server. Use `${env:NAME}` to read a value from the environment instead of writing it into the client config, for example `"-H", "X-Api-Key: ${env:PAYLOAD_API_KEY}"`. In stdio mode stdout carries only JSON-RPC lines and all logs go to stderr.
+
+### Consumer config: http mode (alternative)
+
+Start the proxy with `mcp-auth-proxy http`, then point the client at it. Non-IAP headers such as an API key pass through unchanged:
 
 ```json
 {
@@ -48,13 +76,27 @@ Consumer config (Claude Code style). Non-IAP headers such as an API key pass thr
 ## CLI
 
 ```
-mcp-auth-proxy [serve] [-c path] [-p port] [--host addr] [--debug]
+mcp-auth-proxy [stdio] -s <strategy> -t <url> [-H "Name: value"]... [-c path] [--debug]
+mcp-auth-proxy http [-c path] [-p port] [--host addr] [--debug]
 mcp-auth-proxy check [strategy...] [-c path]
 mcp-auth-proxy --help | --version
 ```
 
+| Option | Applies to | Meaning |
+| --- | --- | --- |
+| `-s`, `--strategy <name>` | stdio | Configured strategy that generates the credentials. Required. |
+| `-t`, `--target <url>` | stdio | Remote MCP endpoint. Its host must match the strategy's effective `allowedHosts`. Required. |
+| `-H`, `--header "Name: value"` | stdio | Header sent to the target. Repeatable; `-H"X: y"` and `--header=...` also work. `{{name}}` placeholders are filled by the proxy and `${env:NAME}` is expanded from the environment first. |
+| `-p`, `--port <number>` | http | Override `listen.port`. |
+| `--host <address>` | http | Override `listen.host`. |
+| `-c`, `--config <path>` | all | Config file. |
+| `--debug` | all | Log one line per proxied request (templated path, never credentials). |
+
 - Config path: `-c`, else `$MCP_AUTH_PROXY_CONFIG`, else `~/.mcp-auth-proxy/config.yaml`.
-- `serve` logs to stderr and shuts down cleanly on SIGINT and SIGTERM. `--debug` logs one line per proxied request (templated path, never credentials).
+- stdio is the default command: with no command, or with `stdio`, the proxy bridges stdin and stdout to `--target`. It opens no TCP port, and `listen.*` is ignored. `--port` and `--host` are usage errors in this mode, and so are `-s`, `-t` and `-H` with `http` or `check`.
+- A header with no colon or an empty name is a usage error, as is a name starting with `X-Proxy-` (reserved, case-insensitive). A `${env:NAME}` that is unset or empty is a config error (exit 2) naming the variable.
+- `http` logs to stderr and shuts down cleanly on SIGINT and SIGTERM. The old `serve` command no longer exists.
+- stdio mode exits when stdin closes or on SIGINT and SIGTERM.
 - `check` runs each strategy (or the named ones) once and prints masked values, expiry and where it came from, and the effective `allowedHosts`. Exit code 1 if any generator failed, 2 for config or usage errors.
 
 ## Configuration
@@ -153,6 +195,8 @@ Credentials that are already expired when parsed are an error.
 
 ## Request format
 
+This section describes http mode. In stdio mode the proxy sets `X-Proxy-Strategy` and `X-Proxy-Target` itself from `-s` and `-t`, and `-H` values are the other consumer headers; placeholders, refresh behavior and errors work the same way.
+
 Consumer headers:
 
 | Header | Required | Meaning |
@@ -211,14 +255,15 @@ Errors from the proxy itself are JSON `{"error":{"code":"...","message":"..."}}`
 
 ## Security model
 
-- **No client authentication to the proxy.** Protection is the loopback bind, Host header checks and `Origin` rejection (DNS rebinding and browsers). Any local process that can reach the port can use your credentials for any allowed host. Only widen `listen.host` if you understand that.
+- **stdio mode has no listener.** The proxy talks to its parent process over stdin/stdout through an in-process pipe, so no local process can borrow the credentials.
+- **No client authentication to the proxy in http mode.** Protection is the loopback bind, Host header checks and `Origin` rejection (DNS rebinding and browsers). Any local process that can reach the port can use your credentials for any allowed host. Only widen `listen.host` if you understand that.
 - Consumers cannot run code: they only pick a strategy by name, and strategies take no parameters. The target is limited to `allowedHosts`, so credentials cannot be sent elsewhere.
 - Credential values are never logged and never returned by `/_health` or `check`. Parse errors do not echo the command's output, and stderr shown in errors is redacted.
 - Config is trusted input: `command` runs with your privileges. Keep the config file writable only by you. Do not put secrets in it, use `${env:NAME}` or let the command fetch them.
 
-## Running in the background (macOS)
+## Running in the background (macOS, http mode)
 
-`examples/launchd/com.example.mcp-auth-proxy.plist` is a LaunchAgent template. Replace the `__HOME__` placeholder, put the binary at `~/.local/bin/mcp-auth-proxy` (or edit the path in the plist), copy the plist to `~/Library/LaunchAgents/`, then `launchctl bootstrap gui/$(id -u) <plist>`.
+Only needed for `mcp-auth-proxy http`; stdio mode is started by the client. `examples/launchd/com.example.mcp-auth-proxy.plist` is a LaunchAgent template that runs `mcp-auth-proxy http`. Replace the `__HOME__` placeholder, put the binary at `~/.local/bin/mcp-auth-proxy` (or edit the path in the plist), copy the plist to `~/Library/LaunchAgents/`, then `launchctl bootstrap gui/$(id -u) <plist>`.
 
 launchd starts jobs with a minimal `PATH`, so a command that calls `gcloud`, `jq` and similar needs `PATH` set in the strategy's `env` (the example config does this).
 

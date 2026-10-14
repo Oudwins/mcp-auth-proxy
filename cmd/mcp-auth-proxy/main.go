@@ -28,16 +28,29 @@ func usage() string {
 	return `mcp-auth-proxy: local reverse proxy that injects generated credentials into requests to remote MCP servers
 
 Usage:
-  mcp-auth-proxy [serve] [options]      start the proxy (default)
+  mcp-auth-proxy -s <strategy> -t <url> [-H "Name: value"]...
+                                        stdio MCP server (default): bridge stdin/stdout to a
+                                        remote MCP server, no port is opened
+  mcp-auth-proxy http [options]         run the proxy as a local HTTP server
   mcp-auth-proxy check [strategy...]    run the auth command(s) once and show what they return
 
-Options:
-  -c, --config <path>   config file (default: $` + configEnv + ` or ` + config.DefaultPath() + `)
-  -p, --port <number>   override listen.port
-      --host <address>  override listen.host
-      --debug           log every proxied request
-  -h, --help            show this help
-  -v, --version         show the version
+Options for stdio (the default command):
+  -s, --strategy <name>      strategy that generates the credentials (required)
+  -t, --target <url>         remote MCP endpoint (required)
+  -H, --header <"Name: value">
+                             header sent to the target, repeatable. {{token}}-style
+                             placeholders are filled by the proxy, ${env:NAME} is
+                             expanded from the environment. X-Proxy-* names are reserved.
+
+Options for http:
+  -p, --port <number>        override listen.port
+      --host <address>       override listen.host
+
+Options for all commands:
+  -c, --config <path>        config file (default: $` + configEnv + ` or ` + config.DefaultPath() + `)
+      --debug                log every proxied request
+  -h, --help                 show this help
+  -v, --version              show the version
 `
 }
 
@@ -45,6 +58,9 @@ type options struct {
 	config      *string
 	port        *string
 	host        *string
+	strategy    *string
+	target      *string
+	headers     []string
 	debug       bool
 	help        bool
 	version     bool
@@ -57,15 +73,18 @@ type optionSpec struct {
 }
 
 var longOptions = map[string]optionSpec{
-	"config":  {true, func(o *options, v string) { o.config = &v }},
-	"port":    {true, func(o *options, v string) { o.port = &v }},
-	"host":    {true, func(o *options, v string) { o.host = &v }},
-	"debug":   {false, func(o *options, _ string) { o.debug = true }},
-	"help":    {false, func(o *options, _ string) { o.help = true }},
-	"version": {false, func(o *options, _ string) { o.version = true }},
+	"config":   {true, func(o *options, v string) { o.config = &v }},
+	"port":     {true, func(o *options, v string) { o.port = &v }},
+	"host":     {true, func(o *options, v string) { o.host = &v }},
+	"strategy": {true, func(o *options, v string) { o.strategy = &v }},
+	"target":   {true, func(o *options, v string) { o.target = &v }},
+	"header":   {true, func(o *options, v string) { o.headers = append(o.headers, v) }},
+	"debug":    {false, func(o *options, _ string) { o.debug = true }},
+	"help":     {false, func(o *options, _ string) { o.help = true }},
+	"version":  {false, func(o *options, _ string) { o.version = true }},
 }
 
-var shortOptions = map[byte]string{'c': "config", 'p': "port", 'h': "help", 'v': "version"}
+var shortOptions = map[byte]string{'c': "config", 'p': "port", 's': "strategy", 't': "target", 'H': "header", 'h': "help", 'v': "version"}
 
 func parseArgs(args []string) (options, error) {
 	var o options
@@ -123,7 +142,7 @@ func parseArgs(args []string) (options, error) {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.Getenv)
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv)
 	stop()
 	os.Exit(code)
 }
@@ -143,7 +162,7 @@ func failure(stderr io.Writer, err error) int {
 	return 1
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer, env func(string) string) int {
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env func(string) string) int {
 	opts, err := parseArgs(args)
 	if err != nil {
 		return usageFailure(stderr, "error: "+err.Error())
@@ -157,15 +176,42 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env func(
 		return 0
 	}
 
-	command, rest := "serve", opts.positionals
+	command, rest := "stdio", opts.positionals
 	if len(rest) > 0 {
 		command, rest = rest[0], rest[1:]
 	}
 	switch {
-	case command != "serve" && command != "check":
+	case command != "stdio" && command != "http" && command != "check":
 		return usageFailure(stderr, fmt.Sprintf("unknown command %q", command))
-	case command == "serve" && len(rest) > 0:
-		return usageFailure(stderr, fmt.Sprintf("unexpected argument %q for serve", rest[0]))
+	case command != "check" && len(rest) > 0:
+		return usageFailure(stderr, fmt.Sprintf("unexpected argument %q for %s", rest[0], command))
+	}
+
+	var headerLines []headerLine
+	if command == "stdio" {
+		switch {
+		case opts.port != nil:
+			return usageFailure(stderr, "option --port is not valid in stdio mode (it opens no port; use the http command)")
+		case opts.host != nil:
+			return usageFailure(stderr, "option --host is not valid in stdio mode (it opens no port; use the http command)")
+		case opts.strategy == nil:
+			return usageFailure(stderr, "missing required option --strategy (-s)")
+		case opts.target == nil:
+			return usageFailure(stderr, "missing required option --target (-t)")
+		}
+		headerLines, err = parseHeaderLines(opts.headers)
+		if err != nil {
+			return usageFailure(stderr, "error: "+err.Error())
+		}
+	} else {
+		switch {
+		case opts.strategy != nil:
+			return usageFailure(stderr, fmt.Sprintf("option --strategy is only valid in stdio mode, not with %s", command))
+		case opts.target != nil:
+			return usageFailure(stderr, fmt.Sprintf("option --target is only valid in stdio mode, not with %s", command))
+		case len(opts.headers) > 0:
+			return usageFailure(stderr, fmt.Sprintf("option --header is only valid in stdio mode, not with %s", command))
+		}
 	}
 
 	path := config.DefaultPath()
@@ -190,10 +236,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env func(
 	}
 
 	log := logger.New(opts.debug || cfg.LogLevel == "debug", stderr)
-	if command == "check" {
+	switch command {
+	case "check":
 		return runCheck(ctx, cfg, rest, log, stdout, stderr)
+	case "http":
+		return runHTTP(ctx, cfg, log, stderr)
 	}
-	return runServe(ctx, cfg, log, stderr)
+
+	if _, ok := cfg.Strategies[*opts.strategy]; !ok {
+		return failure(stderr, &config.ConfigError{Message: fmt.Sprintf(
+			"unknown strategy(ies): %s (available: %s)", *opts.strategy, strings.Join(cfg.StrategyNames(), ", "))})
+	}
+	headers, err := buildHeaders(headerLines, env)
+	if err != nil {
+		return failure(stderr, err)
+	}
+	return runStdio(ctx, cfg, stdioParams{strategy: *opts.strategy, target: *opts.target, headers: headers}, log, stdin, stdout, stderr)
 }
 
 func mask(value string) string {

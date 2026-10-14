@@ -18,7 +18,7 @@ import (
 
 var listeningPattern = regexp.MustCompile(`listening on [^\s:]+:(\d+)`)
 
-type serveProcess struct {
+type httpProcess struct {
 	t      *testing.T
 	stdout syncBuffer
 	stderr syncBuffer
@@ -27,12 +27,12 @@ type serveProcess struct {
 	code   int
 }
 
-func startServe(t *testing.T, env map[string]string, args ...string) *serveProcess {
+func startHTTP(t *testing.T, env map[string]string, args ...string) *httpProcess {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &serveProcess{t: t, cancel: cancel, exited: make(chan struct{})}
+	s := &httpProcess{t: t, cancel: cancel, exited: make(chan struct{})}
 	go func() {
-		s.code = run(ctx, args, &s.stdout, &s.stderr, envFunc(env))
+		s.code = run(ctx, args, strings.NewReader(""), &s.stdout, &s.stderr, envFunc(env))
 		close(s.exited)
 	}()
 	t.Cleanup(func() {
@@ -42,7 +42,7 @@ func startServe(t *testing.T, env map[string]string, args ...string) *serveProce
 	return s
 }
 
-func (s *serveProcess) port() int {
+func (s *httpProcess) port() int {
 	s.t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
@@ -52,21 +52,21 @@ func (s *serveProcess) port() int {
 		}
 		select {
 		case <-s.exited:
-			s.t.Fatalf("serve exited with %d before listening\nstdout: %s\nstderr: %s", s.code, s.stdout.String(), s.stderr.String())
+			s.t.Fatalf("http exited with %d before listening\nstdout: %s\nstderr: %s", s.code, s.stdout.String(), s.stderr.String())
 		case <-deadline:
-			s.t.Fatalf("serve did not start listening\nstderr: %s", s.stderr.String())
+			s.t.Fatalf("http did not start listening\nstderr: %s", s.stderr.String())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
 
-func (s *serveProcess) stop() int {
+func (s *httpProcess) stop() int {
 	s.t.Helper()
 	s.cancel()
 	select {
 	case <-s.exited:
 	case <-time.After(10 * time.Second):
-		s.t.Fatalf("serve did not shut down\nstderr: %s", s.stderr.String())
+		s.t.Fatalf("http did not shut down\nstderr: %s", s.stderr.String())
 	}
 	return s.code
 }
@@ -97,7 +97,7 @@ func getHealth(t *testing.T, port int) healthResponse {
 	return health
 }
 
-func TestServeStartupAndShutdown(t *testing.T) {
+func TestHTTPStartupAndShutdown(t *testing.T) {
 	tests := []struct {
 		name   string
 		listen map[string]any
@@ -107,42 +107,42 @@ func TestServeStartupAndShutdown(t *testing.T) {
 		unwant []string
 	}{
 		{
-			name:   "serve with -p 0",
+			name:   "http with -p 0",
 			listen: map[string]any{"port": 0},
-			args:   func(c string) []string { return []string{"serve", "-c", c, "-p", "0"} },
+			args:   func(c string) []string { return []string{"http", "-c", c, "-p", "0"} },
 			want:   []string{"listening on 127.0.0.1:"},
 		},
 		{
 			name:   "port taken from the config",
 			listen: map[string]any{"host": "127.0.0.1", "port": 0},
-			args:   func(c string) []string { return []string{"serve", "-c", c} },
+			args:   func(c string) []string { return []string{"http", "-c", c} },
 			want:   []string{"listening on 127.0.0.1:"},
 		},
 		{
 			name:   "-p overrides the configured port",
 			listen: map[string]any{"port": 1},
-			args:   func(c string) []string { return []string{"serve", "--config", c, "--port=0"} },
+			args:   func(c string) []string { return []string{"http", "--config", c, "--port=0"} },
 			want:   []string{"listening on 127.0.0.1:"},
 			unwant: []string{"listening on 127.0.0.1:1\n"},
 		},
 		{
 			name:   "--host overrides the configured host",
 			listen: map[string]any{"host": "0.0.0.0", "port": 0},
-			args:   func(c string) []string { return []string{"serve", "-c", c, "--host", "127.0.0.1"} },
+			args:   func(c string) []string { return []string{"http", "-c", c, "--host", "127.0.0.1"} },
 			want:   []string{"listening on 127.0.0.1:"},
 			unwant: []string{"0.0.0.0", "non-loopback"},
 		},
 		{
-			name:   "serve is the default command and the path comes from MCP_AUTH_PROXY_CONFIG",
+			name:   "the path comes from MCP_AUTH_PROXY_CONFIG",
 			listen: map[string]any{"port": 0},
 			env:    map[string]string{},
-			args:   func(string) []string { return nil },
+			args:   func(string) []string { return []string{"http"} },
 			want:   []string{"listening on 127.0.0.1:"},
 		},
 		{
 			name:   "flags before the subcommand",
 			listen: map[string]any{"port": 0},
-			args:   func(c string) []string { return []string{"-c", c, "-p", "0", "serve"} },
+			args:   func(c string) []string { return []string{"-c", c, "-p", "0", "http"} },
 			want:   []string{"listening on 127.0.0.1:"},
 		},
 	}
@@ -155,7 +155,7 @@ func TestServeStartupAndShutdown(t *testing.T) {
 				env[configEnv] = config
 			}
 
-			s := startServe(t, env, tt.args(config)...)
+			s := startHTTP(t, env, tt.args(config)...)
 			port := s.port()
 			health := getHealth(t, port)
 
@@ -191,9 +191,9 @@ func TestServeStartupAndShutdown(t *testing.T) {
 	}
 }
 
-func TestServeRejectsAForeignHostHeader(t *testing.T) {
+func TestHTTPRejectsAForeignHostHeader(t *testing.T) {
 	f := newFixture(t)
-	s := startServe(t, nil, "serve", "-c", f.writeConfigWith(nil, map[string]any{"port": 0}), "-p", "0")
+	s := startHTTP(t, nil, "http", "-c", f.writeConfigWith(nil, map[string]any{"port": 0}), "-p", "0")
 	port := s.port()
 
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/_health", port), nil)
@@ -212,7 +212,7 @@ func TestServeRejectsAForeignHostHeader(t *testing.T) {
 	}
 }
 
-func TestServeProxiesWithInjectedCredentialsAndHonorsDebug(t *testing.T) {
+func TestHTTPProxiesWithInjectedCredentialsAndHonorsDebug(t *testing.T) {
 	tests := []struct {
 		name      string
 		args      []string
@@ -245,7 +245,7 @@ func TestServeProxiesWithInjectedCredentialsAndHonorsDebug(t *testing.T) {
 				},
 			})
 
-			s := startServe(t, nil, append([]string{"serve", "-c", config, "-p", "0"}, tt.args...)...)
+			s := startHTTP(t, nil, append([]string{"http", "-c", config, "-p", "0"}, tt.args...)...)
 			port := s.port()
 
 			req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", port), nil)
@@ -285,7 +285,7 @@ func TestServeProxiesWithInjectedCredentialsAndHonorsDebug(t *testing.T) {
 	}
 }
 
-func TestServeStartupFailureExitsOne(t *testing.T) {
+func TestHTTPStartupFailureExitsOne(t *testing.T) {
 	f := newFixture(t)
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -294,7 +294,7 @@ func TestServeStartupFailureExitsOne(t *testing.T) {
 	t.Cleanup(func() { taken.Close() })
 	port := strconv.Itoa(taken.Addr().(*net.TCPAddr).Port)
 
-	got := runCLI(t, nil, "serve", "-c", f.writeConfig(), "--host", "127.0.0.1", "-p", port)
+	got := runCLI(t, nil, "http", "-c", f.writeConfig(), "--host", "127.0.0.1", "-p", port)
 
 	if got.code != 1 {
 		t.Fatalf("exit code %d, want 1\nstderr: %s", got.code, got.stderr)

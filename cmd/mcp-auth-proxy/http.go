@@ -16,7 +16,7 @@ import (
 
 const shutdownTimeout = 5 * time.Second
 
-func runServe(ctx context.Context, cfg *config.Config, log logger.Logger, stderr io.Writer) int {
+func runHTTP(ctx context.Context, cfg *config.Config, log logger.Logger, stderr io.Writer) int {
 	running, err := proxy.Start(proxy.Options{Config: cfg, Log: log})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)

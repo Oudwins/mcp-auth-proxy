@@ -81,10 +81,10 @@ func bracketed(host string) string {
 	return host
 }
 
-func Start(o Options) (*Running, error) {
+func newHandler(o Options) (*handler, map[string]*auth.Provider, *http.Transport, error) {
 	cfg := o.Config
 	if cfg == nil {
-		return nil, errors.New("proxy: missing config")
+		return nil, nil, nil, errors.New("proxy: missing config")
 	}
 	log := o.Log
 	if log == nil {
@@ -110,7 +110,7 @@ func Start(o Options) (*Running, error) {
 	for name, s := range cfg.Strategies {
 		rules, err := hosts.Compile(s.AllowedHosts)
 		if err != nil {
-			return nil, fmt.Errorf("strategy %q: %w", name, err)
+			return nil, nil, nil, fmt.Errorf("strategy %q: %w", name, err)
 		}
 		provider := auth.NewProvider(auth.ProviderOptions{Name: name, Strategy: s, Log: log})
 		providers[name] = provider
@@ -122,6 +122,15 @@ func Start(o Options) (*Running, error) {
 			rules:         rules,
 		}
 	}
+	return h, providers, transport, nil
+}
+
+func Start(o Options) (*Running, error) {
+	h, providers, transport, err := newHandler(o)
+	if err != nil {
+		return nil, err
+	}
+	cfg, log := h.cfg, h.log
 
 	host := cfg.Listen.Host
 	listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(cfg.Listen.Port)))

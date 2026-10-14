@@ -8,7 +8,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__HOME__/.local/bin/mcp-auth-proxy</string>
-    <string>serve</string>
+    <string>http</string>
     <string>-c</string>
     <string>__HOME__/.mcp-auth-proxy/config.yaml</string>
   </array>

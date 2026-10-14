@@ -77,7 +77,7 @@ func envFunc(env map[string]string) func(string) string {
 func runCLI(t *testing.T, env map[string]string, args ...string) result {
 	t.Helper()
 	var stdout, stderr syncBuffer
-	code := run(context.Background(), args, &stdout, &stderr, envFunc(env))
+	code := run(context.Background(), args, strings.NewReader(""), &stdout, &stderr, envFunc(env))
 	return result{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
@@ -192,7 +192,7 @@ func TestHelpAndVersion(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{"long help", []string{"--help"}, []string{"Usage:", "check [strategy...]", "config.yaml", "--debug", "MCP_AUTH_PROXY_CONFIG"}},
+		{"long help", []string{"--help"}, []string{"Usage:", "check [strategy...]", "config.yaml", "--debug", "MCP_AUTH_PROXY_CONFIG", "mcp-auth-proxy http", "-s <strategy> -t <url>", "--header"}},
 		{"short help", []string{"-h"}, []string{"Usage:"}},
 		{"help after subcommand", []string{"check", "--help"}, []string{"Usage:"}},
 		{"long version", []string{"--version"}, []string{version}},
@@ -232,7 +232,7 @@ func TestUsageErrors(t *testing.T) {
 		{"missing value for long flag", []string{"--config"}, `option "--config" requires a value`},
 		{"missing value for short flag", []string{"check", "-p"}, `option "-p" requires a value`},
 		{"value for boolean flag", []string{"--debug=1"}, `option "--debug" does not take a value`},
-		{"serve with positional", []string{"serve", "extra"}, `unexpected argument "extra" for serve`},
+		{"http with positional", []string{"http", "extra"}, `unexpected argument "extra" for http`},
 		{"command after double dash is still validated", []string{"--", "nope"}, `unknown command "nope"`},
 	}
 	for _, tt := range tests {
@@ -252,7 +252,7 @@ func TestUsageErrors(t *testing.T) {
 func TestBadPort(t *testing.T) {
 	f := newFixture(t)
 	config := f.writeConfig()
-	for _, command := range []string{"check", "serve"} {
+	for _, command := range []string{"check", "http"} {
 		for _, port := range []string{"abc", "70000", "-1", "1.5", "", "65536"} {
 			t.Run(command+" "+port, func(t *testing.T) {
 				got := runCLI(t, nil, command, "-c", config, "--port="+port)
@@ -268,7 +268,7 @@ func TestBadPort(t *testing.T) {
 	}
 
 	t.Run("short form with separate value", func(t *testing.T) {
-		got := runCLI(t, nil, "serve", "-c", config, "-p", "abc")
+		got := runCLI(t, nil, "http", "-c", config, "-p", "abc")
 		if got.code != 2 || !strings.Contains(got.stderr, `invalid --port "abc"`) {
 			t.Fatalf("code %d stderr %q", got.code, got.stderr)
 		}
@@ -522,8 +522,8 @@ func TestConfigErrors(t *testing.T) {
 			want: []string{"config error:", unsetVar},
 		},
 		{
-			name: "serve without allowedHosts",
-			args: []string{"serve"},
+			name: "http without allowedHosts",
+			args: []string{"http"},
 			config: func(f *fixture) string {
 				return f.writeRawConfig("config.yaml", map[string]any{"strategies": map[string]any{"a": map[string]any{"command": "g"}}})
 			},

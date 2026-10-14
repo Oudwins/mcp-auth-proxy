@@ -59,7 +59,7 @@ mcp-auth-proxy --help | --version
 
 ## Configuration
 
-YAML (JSON also parses). Unknown keys are rejected. Every string may contain `${env:NAME}`; a variable that is not set is a startup error naming every missing variable.
+YAML (JSON also parses). Unknown keys are ignored. Every string may contain `${env:NAME}`; a variable that is not set is a startup error naming every missing variable.
 
 ```yaml
 listen:

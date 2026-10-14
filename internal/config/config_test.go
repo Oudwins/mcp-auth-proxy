@@ -513,31 +513,23 @@ func TestEnvironmentInterpolation(t *testing.T) {
 }
 
 func TestValidation(t *testing.T) {
-	t.Run("rejects unknown keys at every level and names the full path", func(t *testing.T) {
+	t.Run("ignores unknown keys at every level", func(t *testing.T) {
 		atRoot := minimal()
 		atRoot["bogus"] = 1
+		atRoot["upstreams"] = raw{"a": raw{"url": "https://x.test"}}
 		inListen := minimal()
 		inListen["listen"] = raw{"port": 1, "bogus": 1}
 
-		expectError(t, atRoot, `(?m)^ {2}bogus: unknown key$`)
-		expectError(t, inListen, `(?m)^ {2}listen\.bogus: unknown key$`)
-		expectError(t, withStrategy(raw{"bogus": 1}), `(?m)^ {2}strategies\.a\.bogus: unknown key$`)
+		mustParse(t, atRoot, "/base")
+		mustParse(t, inListen, "/base")
+		mustParse(t, withStrategy(raw{"bogus": 1, "params": raw{"aud": "x"}}), "/base")
 	})
 
-	t.Run("rejects the v0.1 upstreams and params keys", func(t *testing.T) {
-		old := minimal()
-		old["upstreams"] = raw{"a": raw{"url": "https://x.test"}}
-
-		expectError(t, old, `(?m)^ {2}upstreams: unknown key$`)
-		expectError(t, withStrategy(raw{"params": raw{"aud": "x"}}), `(?m)^ {2}strategies\.a\.params: unknown key$`)
-	})
-
-	t.Run("reports every unknown key together with other problems", func(t *testing.T) {
-		cfg := withStrategy(raw{"params": 1, "extra": 2, "ttl": "soon"})
+	t.Run("still reports real problems next to unknown keys", func(t *testing.T) {
+		cfg := withStrategy(raw{"params": 1, "ttl": "soon"})
 		cfg["bogus"] = 1
 
-		expectError(t, cfg, `(?m)^ {2}bogus: unknown key$`, `strategies\.a\.params: unknown key`,
-			`strategies\.a\.extra: unknown key`, `strategies\.a\.ttl: `)
+		expectError(t, cfg, `strategies\.a\.ttl: `)
 	})
 
 	t.Run("does not flag arbitrary keys in env or strategy names", func(t *testing.T) {
@@ -823,14 +815,16 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects unknown keys in a file", func(t *testing.T) {
+	t.Run("ignores unknown keys in a file", func(t *testing.T) {
 		file := writeFile(t, filepath.Join(t.TempDir(), "config.yaml"),
 			"allowedHosts: [a.example.com]\nstrategies:\n  payload:\n    command: g\n    params: {aud: x}\n")
 
-		message := loadError(t, file)
-
-		if !strings.Contains(message, "strategies.payload.params: unknown key") {
-			t.Errorf("error = %s", message)
+		cfg, err := Load(file)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if _, ok := cfg.Strategies["payload"]; !ok {
+			t.Errorf("strategies = %v", cfg.Strategies)
 		}
 	})
 

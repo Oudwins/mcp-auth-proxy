@@ -353,57 +353,6 @@ func interpolateEnv(value any, where string, missing *[]string) any {
 	return value
 }
 
-func zogKey(field reflect.StructField) string {
-	key, _, _ := strings.Cut(field.Tag.Get("zog"), ",")
-	return key
-}
-
-func unknownKeys(value any, typ reflect.Type, path string, found *[]string) {
-	child := func(key string) string {
-		if path == "" {
-			return key
-		}
-		return path + "." + key
-	}
-	switch typ.Kind() {
-	case reflect.Struct:
-		node, ok := value.(map[string]any)
-		if !ok {
-			return
-		}
-		fields := map[string]reflect.Type{}
-		for i := range typ.NumField() {
-			if key := zogKey(typ.Field(i)); key != "" {
-				fields[key] = typ.Field(i).Type
-			}
-		}
-		for _, key := range slices.Sorted(maps.Keys(node)) {
-			fieldType, known := fields[key]
-			if !known {
-				*found = append(*found, fmt.Sprintf("  %s: unknown key", child(key)))
-				continue
-			}
-			unknownKeys(node[key], fieldType, child(key), found)
-		}
-	case reflect.Map:
-		node, ok := value.(map[string]any)
-		if !ok {
-			return
-		}
-		for _, key := range slices.Sorted(maps.Keys(node)) {
-			unknownKeys(node[key], typ.Elem(), child(key), found)
-		}
-	case reflect.Slice:
-		items, ok := value.([]any)
-		if !ok {
-			return
-		}
-		for i, item := range items {
-			unknownKeys(item, typ.Elem(), fmt.Sprintf("%s[%d]", path, i), found)
-		}
-	}
-}
-
 func invalid(lines []string) *ConfigError {
 	slices.Sort(lines)
 	lines = slices.Compact(lines)
@@ -423,7 +372,6 @@ func Parse(raw any, baseDir string) (*Config, error) {
 	}
 
 	var lines []string
-	unknownKeys(tree, reflect.TypeOf(rawConfig{}), "", &lines)
 	var parsed rawConfig
 	for _, issue := range configSchema.Parse(tree, &parsed, z.WithIssueFormatter(formatIssue)) {
 		lines = append(lines, fmt.Sprintf("  %s: %s", formatPath(issue.Path), issue.Message))

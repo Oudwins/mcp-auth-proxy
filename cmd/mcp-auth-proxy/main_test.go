@@ -499,17 +499,17 @@ func TestConfigErrors(t *testing.T) {
 			config: func(f *fixture) string {
 				return f.writeRawConfig("config.yaml", map[string]any{
 					"allowedHosts": []string{"ftp://bad"},
-					"strategies":   map[string]any{"a": map[string]any{"command": "g", "params": map[string]any{}}},
+					"strategies":   map[string]any{"a": map[string]any{"command": "g", "ttl": "soon"}},
 				})
 			},
 			want: []string{"config error: invalid config:", "allowedHosts", "strategies"},
 		},
 		{
-			name: "a v0.1 config that still uses upstreams",
+			name: "a v0.1 config that still uses upstreams has no strategies",
 			config: func(f *fixture) string {
 				return f.writeRawConfig("config.yaml", map[string]any{"upstreams": map[string]any{"a": map[string]any{"url": "https://x.test/mcp"}}})
 			},
-			want: []string{"config error:", "upstreams"},
+			want: []string{"config error:", "strategies"},
 		},
 		{
 			name: "missing environment variables are named",

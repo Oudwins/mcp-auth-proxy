@@ -1,0 +1,24 @@
+listen:
+  host: 127.0.0.1
+  port: 7600
+
+# Required. Targets must match one of these unless the strategy has its own list.
+allowedHosts:
+  - "*.example.com"
+
+strategies:
+  # Bare token on stdout, available as {{token}}.
+  example-iap:
+    command: [gcloud, auth, print-identity-token, "--audiences=${env:IAP_AUDIENCE}"]
+    output: token
+    ttl: 55m
+    env:
+      PATH: /usr/local/bin:/usr/bin:/bin
+
+  # JSON on stdout, every key of "values" becomes a placeholder.
+  example-script:
+    command: [bash, ./auth/json-script.sh]
+    output: json
+    timeout: 20s
+    allowedHosts:
+      - https://internal.example.com
